@@ -5,6 +5,13 @@ library(nortest)
 library(corrplot)
 library(patchwork)
 library(viridis)
+library(randomForest)
+library(DALEX)
+library(iml)
+library(future)
+
+# Increase the memory limit
+options(future.globals.maxSize = 3 * 1024^3)  # 3 GB
 
 # Load the data
 train_set <- read_csv("Data/train.csv")
@@ -169,16 +176,49 @@ association_function(df = eda_train,col1 = "clonesize",col2 = "yield")
 association_function(df = eda_train,col1 = "honeybee",col2 = "yield")
 
 #### Initial Feature engineering ####
+model_data <- train_set %>% select(-id)
 
-# Create new features 
+## Train a Baseline model RF
+rf_model <- randomForest(
+  yield ~ .,
+  data = model_data,
+  importance = TRUE)
 
-# Evaluate new features
+## Evaluate the features with DALEX
 
-# Function to Check for interactions 
+# Create explainer
+rf_explainer <- DALEX::explain(
+  model = rf_model,
+  data = model_data[,-17],
+  y = model_data$yield,
+  label = "Random Forest")
 
+# Compute mean permutation-based value of the RMSE with 50 permutations
+vip_50 <- model_parts(
+  explainer = rf_explainer,loss_function = loss_root_mean_square,B = 50,type = "difference")
 
+# Plot the importance 
+plot(vip_50) + 
+  ggtitle("Mean variable-importance over 50 permutations", "") 
 
+## Check for interactions with iml
 
+# Create a predictor
+predictor <- Predictor$new(rf_model,data = model_data[,-17],y = model_data$yield)
+
+# Calculate interactions 
+interaction_obj <- Interaction$new(predictor)
+
+# Plot interactions 
+interaction_obj$plot()
+
+## Viz the interactions
+
+# Interaction function 
+viz_interactions <- function(df,model,col1,col2){
+  
+  
+}
 
 
 
