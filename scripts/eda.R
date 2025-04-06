@@ -165,7 +165,7 @@ association_function <- function(df,col1,col2){
   }
 }
 
-## Test between Yield ~ Positive predictions
+## Test between Yield ~ Positive predictors
 association_function(df = eda_train,col1 = "seeds",col2 = "yield")
 association_function(df = eda_train,col1 = "fruitset",col2 = "yield")
 association_function(df = eda_train,col1 = "fruitmass",col2 = "yield")
@@ -212,13 +212,22 @@ interaction_obj <- Interaction$new(predictor)
 # Plot interactions 
 interaction_obj$plot()
 
-## Viz the interactions
+## PDP for uncorrelated features
+pdp_plot <- model_profile(explainer = rf_explainer,N = 100,variables= c("osmia","andrena","honeybee"),type = "partial")
+plot(pdp_plot,geom = "profiles")
 
-# Interaction function 
-viz_interactions <- function(df,model,col1,col2){
-  
-  
-}
+## ALE for correlated features
+ale_plot <- model_profile(explainer = rf_explainer,N = 100,variables = c("seeds","fruitset","fruitmass","RainingDays","clonesize","MaxOfLowerTRange"),type = "accumulated")
+plot(ale_plot,geom = "profiles")
+
+
+
+
+
+
+
+
+
 
 
 
