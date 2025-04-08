@@ -185,7 +185,13 @@ bagged_nn <- bag_mlp() %>%
   set_mode("regression")
 
 ## Tune the recipes
-tune_pca <- function(recipe,grid,model_id = "recipe_null_model"){
+
+# Set Metric
+metric <- metric_set(mae)
+
+# Tune recipe func
+
+tune_pca <- function(recipe,grid){
   
   # Create a workflow set for tuning the recipes
   workflow_recipe_set <- workflow_set(
@@ -205,16 +211,22 @@ tune_pca <- function(recipe,grid,model_id = "recipe_null_model"){
     fn = "tune_grid",
     resamples = vfold_cv(data = train,v = 5,strata = yield),
     grid = grid,
-    control = control_grid(save_pred = TRUE,parallel_over = "everything",verbose = TRUE)
+    control = control_grid(save_pred = TRUE,parallel_over = "everything",verbose = TRUE),
+    metrics = metric
   )
   
   # Extract the results
   results_all_details <- tuned_results %>%
-   extract_workflow_set_result(model_id) %>%
-    select_best(metric = "rmse")
+   collect_metrics()
+  
+  # Best results
+  best_result <- tuned_results %>%
+    extract_workflow_set_result("recipe_mlp") %>%
+    select_best(metric = "mse")
   
   # Return 
   return(list(
+    best = best_result,
     result = results_all_details,
     tuned_results = tuned_results)
   )
@@ -223,28 +235,57 @@ tune_pca <- function(recipe,grid,model_id = "recipe_null_model"){
 # Take the best result Model Id = recipe + model
 
 # PCA recipes
-pca_4_best <- tune_pca(recipe = recipe_pca_4,grid = grid_4_pca,model_id = "recipe_mlp")
-pca_1_best <- tune_pca(recipe = recipe_pca_1,grid = grid_pca_1,model_id = "recipe_mlp")
+pca_4_best <- tune_pca(recipe = recipe_pca_4,grid = grid_4_pca)
+pca_1_best <- tune_pca(recipe = recipe_pca_1,grid = grid_pca_1)
 
 # PLS recipe
-pls_1_best <- tune_pca(recipe = recipe_pls_1,grid = grid_pls_1,model_id = "recipe_mlp")
-pls_4_best <- tune_pca(recipe = recipe_pls_4,grid = grid_pls_4,model_id = "recipe_mlp")
+pls_1_best <- tune_pca(recipe = recipe_pls_1,grid = grid_pls_1)
+pls_4_best <- tune_pca(recipe = recipe_pls_4,grid = grid_pls_4)
 
 # Finalize the recipes
 
 # PCA
-pca_4_final <- finalize_recipe(recipe_pca_4,parameters = pca_4_best$result)
-pca_1_final <- finalize_recipe(recipe_pca_1,parameters = pca_1_best)
+pca_4_final <- finalize_recipe(recipe_pca_4,parameters = pca_4_best$best)
+pca_1_final <- finalize_recipe(recipe_pca_1,parameters = pca_1_best$best)
 
 # PLS
-pls_4_final <- finalize_recipe(recipe_pls_4,parameters = pls_4_best$result)
-pls_1_final <- finalize_recipe(recipe_pls_1,parameters = pls_1_best$result)
+pls_4_final <- finalize_recipe(recipe_pls_4,parameters = pls_4_best$best)
+pls_1_final <- finalize_recipe(recipe_pls_1,parameters = pls_1_best$best)
+
+#### Model Selection ####
+
+# Workflow set
+model_select_workflow_set <- workflow_set(
+  preproc = list(
+    pca_4 = pca_4_final,
+    pca_1 = pca_1_final,
+    pls_1 = pls_1_final,
+    pls_4 = pls_4_final),
+  models = list(
+    mlp = mlp,
+    bagged_nn = bagged_nn,
+    mars_model = mars_model,
+    bagged_mars_model = bagged_mars_model,
+    random_forest = rf_model,
+    xgb = xgb_model,
+    null_model = null_model),
+  cross = TRUE)
+
+## Workflow map 
+# Execute workflow map
+model_select_workflow_map <- model_select_workflow_set %>%
+  workflow_map(
+    fn = "fit_resamples",
+    verbose = TRUE,
+    resamples = vfold_cv(data = validation_set,v = 5,strata = yield),
+    control = control_grid(save_pred = TRUE,parallel_over = "everything",verbose = TRUE),
+    metrics = metric)
+
+# Collect the Results
+model_select_results <- collect_metrics(model_select_workflow_map)
+
+## Evaluate Candidates
 
 # Back to default (1 core)
 plan(sequential)  
-
-
-
-
-
 
