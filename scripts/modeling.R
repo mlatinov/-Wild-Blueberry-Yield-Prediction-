@@ -244,7 +244,7 @@ workflow_light_tune <- workflow_set(
     pls_4 = pls_4_final
   ),
   models = list(
-    mlp = mlp,
+    mlp = mlp %>% update(hidden_units = tune() ,epochs = tune()),
     bagged_nn = bagged_nn %>% update(hidden_units = tune() ,epochs = tune()),
     mars_model = mars_model %>% update(num_terms = tune(),prod_degree = tune()),
     bagged_mars_model = bagged_mars_model %>% update(num_terms = tune(),prod_degree = tune()),
@@ -266,22 +266,26 @@ tuned_models <- workflow_light_tune %>%
 # Get all the workflow IDs
 wf_ids <- tuned_models$wflow_id
 
-# For each workflow, extract the best parameters
-best_params_all <- map(wf_ids, ~ tuned_models %>%
-                         extract_workflow_set_result(.x) %>%
-                         select_best(metric = "mae"))
+# Extract the best parameters
+best_params_func <- function(workflow_map,model_id,metric){
+  
+  best <- workflow_map %>%
+    extract_workflow_set_result(model_id) %>%
+    select_best(metric = "mae")
+}
 
-# List of workflows 
-all_workflows <- tuned_models$result
+# Save the best params from tune_race_anova
+best_mlp <- best_params_func(workflow_map = tuned_models, model_id = "pls_4_mlp")
 
-# finalize workflows
-final_workflows <- pmap(
-  list(
-    wf = all_workflows,
-    params = best_params_all
-  ),
-  .f = finalize_workflow
-)
+best_bagged_nn <- best_params_func(workflow_map = tuned_models,model_id ="pls_1_bagged_nn")
+
+best_mars <- best_params_func(workflow_map = tuned_models,model_id ="pca_4_mars_model")
+
+best_bagged_mars_model <- best_params_func(workflow_map = tuned_models,model_id = "pca_4_bagged_mars_model")
+
+best_random_forest <- best_params_func(workflow_map = tuned_models,model_id = "pls_1_random_forest")
+
+best_xgb <- best_params_func(workflow_map = tuned_models,model_id = "pca_4_xgb")
 
 # Workflow set Selection
 model_select_workflow_set <- workflow_set(
@@ -292,12 +296,13 @@ model_select_workflow_set <- workflow_set(
     pls_4 = pls_4_final
     ),
   models = list(
-    mlp = mlp,
-    bagged_nn = bagged_nn,
-    mars_model = mars_model,
-    bagged_mars_model = bagged_mars_model,
-    random_forest = rf_model,
-    xgb = xgb_model,
+    mlp = mlp %>% update(hidden_units = best_mlp$hidden_units ,epochs = best_mlp$epochs),
+    bagged_nn = bagged_nn %>% update(hidden_units = best_bagged_nn$hidden_units ,epochs = best_bagged_nn$epochs),
+    mars_model = mars_model %>% update(num_terms = best_mars$num_terms,prod_degree = best_mars$prod_degree),
+    bagged_mars_model = bagged_mars_model %>% update(num_terms = best_bagged_mars_model$num_terms,prod_degree = best_bagged_mars_model$prod_degree),
+    random_forest = rf_model %>% update(mtry = best_random_forest$mtry ,trees = 300 ,min_n = best_random_forest$min_n),
+    xgb = xgb_model %>% update(mtry = best_xgb$mtry,trees = best_xgb$trees,tree_depth = best_xgb$tree_depth,learn_rate = best_xgb$learn_rate,
+                               loss_reduction = best_xgb$loss_reduction ,sample_size = best_xgb$sample_size),
     null_model = null_model),
   cross = TRUE)
 
@@ -325,7 +330,7 @@ model_selection_func <- function(df_collect_metrics, model_of_interest, model_re
       y = fct_reorder(factor(wflow_id), .fun = sum, .x = mean, .desc = TRUE),
       fill = model)) +
     geom_col() +
-    scale_fill_viridis_d(option = "C") +
+    scale_fill_viridis_d(option = "A") +
     geom_text(aes(label = round(mean, 2), hjust = -0.1),size = 3) +
     theme_minimal() +
     labs(
@@ -345,7 +350,7 @@ model_selection_func <- function(df_collect_metrics, model_of_interest, model_re
     geom_text(aes(label = round(mean, 2))) +
     theme_minimal() +
     labs(
-      title = "Recipe ~ Models mean MAE",
+      title = "Recipe ~ Models",
       x = "Models",
       y = "Recipes",
       fill = "Mean MAE"
