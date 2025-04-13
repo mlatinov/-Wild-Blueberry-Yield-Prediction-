@@ -18,17 +18,10 @@ plan(multisession, workers = 3)
 ## Load the data 
 train <- read_csv("train.csv")
 
-# Split the training data into train and validation 
-split <- initial_split(data = train,prop = 0.8,strata = yield)
-
-# Create model_training set and validation set
-model_training <- training(split)
-validation_set <- testing(split)
-
 #### Feature engineering ####
 
 ## Create a recipe with 4 PCA groups for better interpretability
-recipe_pca_4 <- recipe(yield ~ .,data = model_training) %>%
+recipe_pca_4 <- recipe(yield ~ .,data = train) %>%
   
   # Isolate ID
   update_role(id, new_role = "ID") %>%  
@@ -74,17 +67,26 @@ recipe_pca_4 <- recipe(yield ~ .,data = model_training) %>%
   step_pca(columns = c("mass_per_seed","seed_efficiency","clonesize_temp_diff"),prefix = "pca_fruit",num_comp = tune("fruit_pca"),id = "fruit_pca") %>%
   
   # PCA for Temperature-related Feaures
-  step_pca(columns = c(" average_temp_range","temp_stability"),prefix = "pca_temp",num_comp = tune("temp_pca"),id = "temp_pca") %>%
+  step_pca(columns = c("average_temp_range","temp_stability"),prefix = "pca_temp",num_comp = tune("temp_pca"),id = "temp_pca") %>%
   
   # PCA for Bee related Features
   step_pca(columns = c("total_polinators","wild_dom_ratio"),prefix = "pca_bee",num_comp = tune("bee_pca"),id = "bee_pca") %>%
   
   # PCA for Rain Related Features
   step_pca(columns = c("rain_anomaly", "rain_per_pollinator"),prefix = "pca_rain_",num_comp = tune("rain_pca"),id = "rain_pca") 
-  
+
+## Grid PCA 4
+grid_pca_4 <- parameters(recipe_pca_4) %>%
+  update(
+    fruit_pca = num_comp(range = c(1,4)),
+    temp_pca = num_comp(range = c(1,4)),
+    bee_pca = num_comp(range = c(1,4)),
+    rain_pca = num_comp(range = c(1,4))
+  ) %>%
+  grid_space_filling(size = 20)
 
 ## Create a recipe with one PCA for performance
-recipe_pca_1 <- recipe(yield ~ .,data = model_training) %>%
+recipe_pca_1 <- recipe(yield ~ .,data = train) %>%
   
   # Isolate ID
   update_role(id, new_role = "ID") %>% 
@@ -128,10 +130,15 @@ recipe_pca_1 <- recipe(yield ~ .,data = model_training) %>%
   
   # PCA 
   step_pca(all_predictors(),num_comp = tune("all_pca"),id = "all_pca")
-  
+
+## Grid PCA 1
+grid_pca_1 <- parameters(recipe_pca_1) %>%
+  update(
+    all_pca = num_comp(range = c(1,10)))%>%
+  grid_space_filling(size = 10)
 
 ## Create a recipe with one PLS for performance
-recipe_pls_1 <- recipe(yield ~ .,data = model_training) %>%
+recipe_pls_1 <- recipe(yield ~ .,data = train) %>%
   
   # Isolate ID
   update_role(id, new_role = "ID") %>% 
@@ -176,9 +183,15 @@ recipe_pls_1 <- recipe(yield ~ .,data = model_training) %>%
   # PLS 
   step_pls(all_predictors(),outcome ="yield",num_comp = tune("all_pls"),id = "all_pls")
 
+## Grid PLS 1
+grid_pls_1 <- parameters(recipe_pls_1) %>%
+  update(
+    all_pls = num_comp(range = c(1,10)))%>%
+  grid_space_filling(size = 10)
+
 
 ## Create a recipe with 4 groups pls
-recipe_pls_4 <- recipe(yield ~ .,data = model_training) %>%
+recipe_pls_4 <- recipe(yield ~ .,data = train) %>%
   
   # Isolate ID
   update_role(id, new_role = "ID") %>% 
@@ -232,9 +245,19 @@ recipe_pls_4 <- recipe(yield ~ .,data = model_training) %>%
   # PCA for Rain Related Features
   step_pls(columns = c("rain_anomaly", "rain_per_pollinator"),prefix = "pls_rain_",num_comp = tune("rain_pls"),id = "rain_pls",outcome ="yield")
 
+## Grid PLS 4 
+grid_pls_4 <- parameters(recipe_pls_4) %>%
+  update(
+    fruit_pls = num_comp(range = c(1,4)),
+    temp_pls = num_comp(range = c(1,4)),
+    bee_pls = num_comp(range = c(1,4)),
+    rain_pls = num_comp(range = c(1,4))
+  ) %>%
+  grid_space_filling(size = 20)
+
 
 ## Create a Hierarchical clustering recipe based on hclust
-recipe_hclust_2 <- recipe(yield ~ .,data = model_training) %>%
+recipe_hclust_2 <- recipe(yield ~ .,data = train) %>%
   
   # Isolate ID
   update_role(id, new_role = "ID") %>% 
@@ -328,24 +351,24 @@ bagged_nn <- bag_mlp() %>%
 metric <- metric_set(yardstick::mae)
 
 # Tune recipe func
-tune_pca <- function(recipe){
+tune_pca <- function(recipe,grid,recipe_id){
   
   # Create a workflow set for tuning the recipes
   workflow_recipe_set <- workflow_set(
     preproc = list(recipe = recipe),
       models = list(
         mlp = mlp,
-        mars_model = mars_model,
-        random_forest = rf_model
+        bagged_mars_model = bagged_mars_model,
+        xgb_model = xgb_model
         ))
   
-  # Workflow map Tune_race_anova
+  # Workflow map 
   tuned_results <- workflow_recipe_set %>%
     workflow_map(
-    fn = "tune_race_anova",
-    resamples = vfold_cv(data = validation_set,v = 10,strata = yield),
-    grid = 20,
-    control = control_race(save_pred = TRUE, parallel_over = "everything", verbose = TRUE),
+    fn = "tune_grid",
+    resamples = vfold_cv(data = train,v = 10,strata = yield),
+    grid = grid,
+    control = control_grid(verbose = TRUE,save_workflow = TRUE,save_pred = TRUE),
     metrics = metric
   )
   
@@ -355,7 +378,7 @@ tune_pca <- function(recipe){
   
   # Best results
   best_result <- tuned_results %>%
-    extract_workflow_set_result("recipe_mlp") %>%
+    extract_workflow_set_result(recipe_id) %>%
     select_best(metric = "mae")
   
   # Return 
@@ -369,12 +392,12 @@ tune_pca <- function(recipe){
 # Take the best result 
 
 # PCA recipes
-pca_4_best <- tune_pca(recipe = recipe_pca_4)
-pca_1_best <- tune_pca(recipe = recipe_pca_1)
+pca_4_best <- tune_pca(recipe = recipe_pca_4,grid = grid_pca_4,recipe_id = "recipe_mlp")
+pca_1_best <- tune_pca(recipe = recipe_pca_1,grid = grid_pca_1,recipe_id = "recipe_mlp")
 
 # PLS recipe
-pls_1_best <- tune_pca(recipe = recipe_pls_1)
-pls_4_best <- tune_pca(recipe = recipe_pls_4)
+pls_1_best <- tune_pca(recipe = recipe_pls_1,grid = grid_pls_1,recipe_id = "recipe_mlp")
+pls_4_best <- tune_pca(recipe = recipe_pls_4,grid = grid_pls_4,recipe_id = "recipe_mlp")
 
 # Finalize the recipes
 
@@ -411,7 +434,7 @@ workflow_light_tune <- workflow_set(
     random_forest = rf_model %>% update(mtry = tune() ,trees = 300 ,min_n = tune()),
     xgb = xgb_model %>% update(mtry = tune() ,trees = tune() ,tree_depth = tune(),learn_rate = tune() ,loss_reduction =tune() ,sample_size = tune()),
     
-    ## Control
+    ## Control Model
     null_model = null_model),
   cross = TRUE)
 
@@ -419,7 +442,7 @@ workflow_light_tune <- workflow_set(
 tuned_models <- workflow_light_tune %>%
   workflow_map(
     fn = "tune_race_anova",
-    resamples = vfold_cv(data = validation_set, v = 10, strata = yield),
+    resamples = vfold_cv(data = train, v = 10, strata = yield),
     grid = 15,
     control = control_race(save_pred = TRUE, verbose_elim = TRUE, parallel_over = "everything"),
     metrics = metric
@@ -437,15 +460,15 @@ best_params_func <- function(workflow_map,model_id,metric){
 }
 
 # Save the best params from tune_race_anova
-best_mlp <- best_params_func(workflow_map = tuned_models,model_id ="pca_1_bagged_nn")
+best_mlp <- best_params_func(workflow_map = tuned_models,model_id ="pca_4_bagged_nn")
 
-best_bagged_nn <- best_params_func(workflow_map = tuned_models,model_id ="pca_1_bagged_nn")
+best_bagged_nn <- best_params_func(workflow_map = tuned_models,model_id ="pca_4_bagged_nn")
 
 best_mars <- best_params_func(workflow_map = tuned_models,model_id ="pca_4_mars_model")
 
 best_bagged_mars_model <- best_params_func(workflow_map = tuned_models,model_id = "pca_4_bagged_mars_model")
 
-best_random_forest <- best_params_func(workflow_map = tuned_models,model_id = "pca_1_random_forest")
+best_random_forest <- best_params_func(workflow_map = tuned_models,model_id = "pca_4_random_forest")
 
 best_xgb <- best_params_func(workflow_map = tuned_models,model_id = "pca_4_xgb")
 
@@ -482,7 +505,7 @@ model_select_workflow_map <- model_select_workflow_set %>%
   workflow_map(
     fn = "fit_resamples",
     verbose = TRUE,
-    resamples = vfold_cv(data = validation_set,v = 10,strata = yield),
+    resamples = vfold_cv(data = train,v = 10,strata = yield),
     control = control_grid(save_pred = TRUE,parallel_over = "everything",verbose = TRUE),
     metrics = metric)
 
@@ -576,7 +599,7 @@ model_selection_func(
 #### Selected Models Tuning ####
 
 # Parameters for tuning
-resamples <- vfold_cv(data = validation_set,v = 10,strata = yield)
+resamples <- vfold_cv(data = train,v = 10,strata = yield)
 metrics <- metric_set(mae)
 control <- control_grid(verbose = TRUE,save_workflow = TRUE,save_pred = TRUE,allow_par = TRUE)
 
@@ -584,9 +607,9 @@ control <- control_grid(verbose = TRUE,save_workflow = TRUE,save_pred = TRUE,all
 control_sim_anneal = control_sim_anneal(
   verbose = TRUE,
   no_improve = 20,            # More patience before restart
-  restart = 10,                # Allow restarts to escape local minimal
+  restart = 10,               # Allow restarts to escape local minimal
   radius = c(0.15,0.30),      # Encourage larger jumps (default is 0.1)
-  cooling = 0.05,                # Faster temperature decay = more exploration early on
+  cooling = 0.05,             # Faster temperature decay = more exploration early on
 )
 
 # BO Control
@@ -684,6 +707,72 @@ tune_mlp <- mlp_worklow_tune %>%
     metrics = metrics,
     control = control
   )
+# Take the best result
+mlp_best <- tune_mlp %>% select_best()
+show_best(tune_mlp)
+
+## XGB 
+xgb_tune <- boost_tree(
+  mtry = tune(),
+  trees = tune(),
+  min_n = tune(),
+  tree_depth = tune(),
+  learn_rate = tune(),
+  sample_size = tune(),
+  loss_reduction = tune())%>%
+  set_engine(
+    "xgboost",
+    objective = "reg:absoluteerror",
+    eval_metric = "mae") %>%
+  set_mode("regression")
+
+# XGB LHC grid
+xgb_grid <- grid_space_filling(
+  parameters(
+  mtry(range = c(3,15)),
+  trees(range = c(1000,3000)),
+  tree_depth(range = c(1,20)),
+  min_n(range = c(2,40)),
+  learn_rate(range = c(-4,-1)),
+  sample_prop(range = c(0.2,1)),
+  loss_reduction(range = c(-10,1.5))),
+  size = 50
+)
+
+# Create a workflow 
+xgb_tune_workflow <- workflow()%>%
+  add_model(xgb_tune)%>%
+  add_recipe(pca_4_final)
+
+# Tune the model
+xgb_initial <- xgb_tune_workflow %>%
+  tune_grid(
+    resamples = resamples,
+    grid = xgb_grid,
+    metrics = metrics,
+    control = control)
+
+xgb_best <- xgb_initial %>% select_best()
+show_best(xgb_initial)
+
+#### Model Explanations ####
+
+### Instance Level ###
+
+## Break-down plots BP
+## SHAP 
+## LIME
+## Ceteris-paribus " What if analysis "
+## Local Diagnostics
+
+### Data set Level ###
+
+## Variables importance measures VIM
+## Partial Dependence Profiles PDP
+## Residuals Diagnostics Plots RDP
+
+#### Stacking ? ####
+
 
 
 
