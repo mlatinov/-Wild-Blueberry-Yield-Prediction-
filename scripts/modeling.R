@@ -302,6 +302,49 @@ recipe_hclust_2 <- recipe(yield ~ .,data = train) %>%
   # Apply Hclust
   step_aggregate_hclust(all_numeric_predictors(),n_clusters = 2,linkage_method = "ward.D2",dist_metric = "manhattan",fun_agg = mean)
 
+## Regular recipe 
+recipe_regular <- recipe(yield ~ .,data = train) %>%
+  
+  # Update Role Id
+  add_role(id ,new_role = "ID") %>% 
+  
+  # Create new Features
+  step_mutate(
+    
+    # Add Pollinator-related features
+    total_polinators = honeybee + bumbles + andrena + osmia,
+    wild_dom_ratio = (bumbles + andrena + osmia) / (honeybee + 1),
+    
+    # Temperature Features
+    average_temp_range = (AverageOfUpperTRange + AverageOfLowerTRange) / 2,
+    temp_stability = (MaxOfUpperTRange - MinOfUpperTRange) + (MaxOfLowerTRange - MinOfLowerTRange),
+    
+    # Rain Patterns
+    rain_anomaly =  RainingDays - AverageRainingDays,
+    rain_per_pollinator = RainingDays / (total_polinators + 1),
+    
+    # Crop Features
+    mass_per_seed = fruitmass / (seeds + 1),
+    seed_efficiency = seeds / (fruitmass + 1),
+    clonesize_temp_diff = clonesize / (AverageOfUpperTRange - AverageOfLowerTRange + 1)
+  ) %>%
+  
+  # Remove old features 
+  step_rm(removals =  c(
+    "MaxOfUpperTRange","MaxOfLowerTRange","MinOfLowerTRange","upper_temp_range","MinOfUpperTRange",
+    "lower_temp_range","honeybee","bumbles","andrena","osmia","RainingDays","AverageRainingDays",
+    "fruitmass","AverageOfLowerTRange","AverageOfUpperTRange","clonesize")) %>%
+  
+  # Remove near zero var features
+  step_nzv(all_predictors()) %>%
+  
+  # Apply Yeo-Jonson transformation
+  step_YeoJohnson(all_predictors()) %>%
+  
+  # Center and Scale
+  step_center(all_numeric_predictors()) %>%
+  step_scale(all_numeric_predictors())
+
 #### Model Spec ####
 
 # Null Model
@@ -415,6 +458,7 @@ pls_1_final <- finalize_recipe(recipe_pls_1,parameters = pls_1_best$best)
 # Workflow set Light Tune
 workflow_light_tune <- workflow_set(
   preproc = list(
+    recipe_regular,
     pca_4 = pca_4_final,
     pca_1 = pca_1_final,
     pls_1 = pls_1_final,
@@ -475,7 +519,7 @@ best_xgb <- best_params_func(workflow_map = tuned_models,model_id = "pca_4_xgb")
 # Workflow set Selection
 model_select_workflow_set <- workflow_set(
   preproc = list(
-    hculst_2 = recipe_hclust_2,
+    recipe_regular,
     pca_4 = pca_4_final,
     pca_1 = pca_1_final,
     pls_1 = pls_1_final,
@@ -511,7 +555,7 @@ model_select_workflow_map <- model_select_workflow_set %>%
 
 # Collect the Results
 model_select_results <- collect_metrics(model_select_workflow_map)
-model_select_resamples <-collect_predictions(model_select_workflow_map)
+model_select_resamples <- collect_predictions(model_select_workflow_map)
 
 # Model Selection Function
 model_selection_func <- function(df_collect_metrics, model_of_interest, model_resamples) {
@@ -621,28 +665,27 @@ control_bo <- control_bayes(
   seed = 123,
   uncertain = 20)
 
-## Bag Mars Model
+##  Mars Model
 # Model Spec
-bag_mars_tune <- bag_mars(
+mars_tune <- mars(
   num_terms = tune(),
   prod_degree = tune()) %>%
-  set_engine("earth",penalty = tune()) %>%
+  set_engine("earth") %>%
   set_mode("regression")
 
 # Create a LHC grid
-bag_mars_grid <- grid_space_filling(
-    num_terms(range = c(2, 100)),
-    prod_degree(range = c(1, 4)),
-    penalty(range = c(-10, 0)),
-    size = 60)
+mars_grid <- grid_space_filling(
+    num_terms(range = c(2,10)),
+    prod_degree(range = c(1,4)),
+    size = 32)
 
 # Create a workflow
-bag_mars_tune_workflow <- workflow()%>%
-  add_model(bag_mars_tune) %>%
+mars_tune_workflow <- workflow()%>%
+  add_model(mars_tune) %>%
   add_recipe(pca_4_final)
 
 # Tune the model
-bag_mars_initial <- bag_mars_tune_workflow %>%
+mars_initial <- mars_tune_workflow %>%
   tune_grid(
     resamples = resamples,
     grid = bag_mars_grid,
@@ -651,25 +694,27 @@ bag_mars_initial <- bag_mars_tune_workflow %>%
   )
 
 # Extract the best results
-bag_mars_initial_best <- bag_mars_initial %>% select_best()
-show_best(bag_mars_initial)
+mars_initial_best <- mars_initial %>% select_best()
+show_best(mars_initial)
 
 # Update the workflow
-bag_mars_tune_workflow <- bag_mars_tune_workflow %>% finalize_workflow(bag_mars_initial_best)
+mars_tune_workflow <- bag_mars_tune_workflow %>% finalize_workflow(bag_mars_initial_best)
 
 ### Optim SA ###
 
 ## SA 
-sa_optim <- bag_mars_tune_workflow %>%
+sa_optim <- mars_tune_workflow %>%
   tune_sim_anneal(
     resamples = resamples,
     metrics = metrics,
-    initial = bag_mars_initial,
+    initial = mars_initial,
     iter = 100,
     control = control_sim_anneal
   )
-  
-plan(sequential) 
+
+# SA results
+sa_results <- sa_optim %>% collect_metrics()
+sa_best <- sa_optim %>% select_best()
 
 ## MLP
 # Model Spec
@@ -692,7 +737,7 @@ mlp_grid <- grid_space_filling(
   learn_rate(range = c(-10,-1)),
   epochs(range = c(10,250)),
   momentum(range = c(0,1)),
-  size = 50)
+  size = 60)
 
 # Create  Workflow
 mlp_worklow_tune <- workflow() %>%
@@ -772,7 +817,7 @@ show_best(xgb_initial)
 ## Residuals Diagnostics Plots RDP
 
 #### Stacking ? ####
-
+plan(sequential)
 
 
 
