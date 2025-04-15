@@ -11,6 +11,8 @@ library(scimo)
 tidymodels_prefer()
 
 # Env Spec
+set.seed(123)
+
 # Plan for using 3 cores
 options(tidymodels.dark = TRUE)
 plan(multisession, workers = 3)
@@ -233,16 +235,16 @@ recipe_pls_4 <- recipe(yield ~ .,data = train) %>%
   step_center(all_numeric_predictors()) %>%
   step_scale(all_numeric_predictors()) %>%
   
-  # PCA for fruit related Features
+  # PLS for fruit related Features
   step_pls(columns = c("mass_per_seed","seed_efficiency","clonesize_temp_diff"),prefix = "pls_fruit",num_comp = tune("fruit_pls"),id = "fruit_pca",outcome ="yield") %>%
   
-  # PCA for Temperature-related Feaures
+  # PLS for Temperature-related Feaures
   step_pls(columns = c(" average_temp_range","temp_stability"),prefix = "pls_temp",num_comp = tune("temp_pls"),id = "temp_pls",outcome ="yield") %>%
   
-  # PCA for Bee related Features
+  # PLS for Bee related Features
   step_pls(columns = c("total_polinators","wild_dom_ratio"),prefix = "pls_bee",num_comp = tune("bee_pls"),id = "bee_pls",outcome ="yield") %>%
   
-  # PCA for Rain Related Features
+  # PLS for Rain Related Features
   step_pls(columns = c("rain_anomaly", "rain_per_pollinator"),prefix = "pls_rain_",num_comp = tune("rain_pls"),id = "rain_pls",outcome ="yield")
 
 ## Grid PLS 4 
@@ -435,12 +437,12 @@ tune_pca <- function(recipe,grid,recipe_id){
 # Take the best result 
 
 # PCA recipes
-pca_4_best <- tune_pca(recipe = recipe_pca_4,grid = grid_pca_4,recipe_id = "recipe_mlp")
-pca_1_best <- tune_pca(recipe = recipe_pca_1,grid = grid_pca_1,recipe_id = "recipe_mlp")
+pca_4_best <- tune_pca(recipe = recipe_pca_4,grid = grid_pca_4,recipe_id = "recipe_xgb_model")
+pca_1_best <- tune_pca(recipe = recipe_pca_1,grid = grid_pca_1,recipe_id = "recipe_xgb_model")
 
 # PLS recipe
-pls_1_best <- tune_pca(recipe = recipe_pls_1,grid = grid_pls_1,recipe_id = "recipe_mlp")
-pls_4_best <- tune_pca(recipe = recipe_pls_4,grid = grid_pls_4,recipe_id = "recipe_mlp")
+pls_1_best <- tune_pca(recipe = recipe_pls_1,grid = grid_pls_1,recipe_id = "recipe_xgb_model")
+pls_4_best <- tune_pca(recipe = recipe_pls_4,grid = grid_pls_4,recipe_id = "recipe_xgb_model")
 
 # Finalize the recipes
 
@@ -458,7 +460,7 @@ pls_1_final <- finalize_recipe(recipe_pls_1,parameters = pls_1_best$best)
 # Workflow set Light Tune
 workflow_light_tune <- workflow_set(
   preproc = list(
-    recipe_regular,
+    recipe_regular = recipe_regular,
     pca_4 = pca_4_final,
     pca_1 = pca_1_final,
     pls_1 = pls_1_final,
@@ -504,22 +506,22 @@ best_params_func <- function(workflow_map,model_id,metric){
 }
 
 # Save the best params from tune_race_anova
-best_mlp <- best_params_func(workflow_map = tuned_models,model_id ="pca_4_bagged_nn")
+best_mlp <- best_params_func(workflow_map = tuned_models,model_id ="recipe_xgb_model")
 
-best_bagged_nn <- best_params_func(workflow_map = tuned_models,model_id ="pca_4_bagged_nn")
+best_bagged_nn <- best_params_func(workflow_map = tuned_models,model_id ="recipe_xgb_model")
 
-best_mars <- best_params_func(workflow_map = tuned_models,model_id ="pca_4_mars_model")
+best_mars <- best_params_func(workflow_map = tuned_models,model_id ="recipe_xgb_model")
 
-best_bagged_mars_model <- best_params_func(workflow_map = tuned_models,model_id = "pca_4_bagged_mars_model")
+best_bagged_mars_model <- best_params_func(workflow_map = tuned_models,model_id = "recipe_xgb_model")
 
-best_random_forest <- best_params_func(workflow_map = tuned_models,model_id = "pca_4_random_forest")
+best_random_forest <- best_params_func(workflow_map = tuned_models,model_id = "recipe_xgb_model")
 
-best_xgb <- best_params_func(workflow_map = tuned_models,model_id = "pca_4_xgb")
+best_xgb <- best_params_func(workflow_map = tuned_models,model_id = "recipe_xgb_model")
 
 # Workflow set Selection
 model_select_workflow_set <- workflow_set(
   preproc = list(
-    recipe_regular,
+    recipe_regular = recipe_regular,
     pca_4 = pca_4_final,
     pca_1 = pca_1_final,
     pls_1 = pls_1_final,
@@ -639,7 +641,6 @@ model_selection_func(
   model_resamples = model_select_resamples
 )
 
-
 #### Selected Models Tuning ####
 
 # Parameters for tuning
@@ -661,7 +662,8 @@ control_bo <- control_bayes(
   verbose = TRUE,
   verbose_iter = TRUE,
   no_improve = 30,
-  save_workflow = TRUE,save_pred = TRUE,
+  save_workflow = TRUE,
+  save_pred = TRUE,
   seed = 123,
   uncertain = 20)
 
@@ -698,7 +700,7 @@ mars_initial_best <- mars_initial %>% select_best()
 show_best(mars_initial)
 
 # Update the workflow
-mars_tune_workflow <- bag_mars_tune_workflow %>% finalize_workflow(bag_mars_initial_best)
+mars_tune_workflow <- bag_mars_tune_workflow %>% finalize_workflow(mars_initial_best)
 
 ### Optim SA ###
 
